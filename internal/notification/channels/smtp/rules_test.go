@@ -231,7 +231,8 @@ func TestRules_Match(t *testing.T) {
 					Hosts:         []string{"smtp.example.com"},
 					SenderDomains: []string{"example.com"},
 				},
-				DisableCustomHTML: true,
+				DisableCustomHTML:                true,
+				SuppressReservedRecipientDomains: true,
 				Headers: []RuleHeader{
 					{Name: "X-Instance-ID", Value: "{{.InstanceID}}"},
 					{Name: "X-Org-ID", Value: "{{.OrgID}}"},
@@ -241,7 +242,8 @@ func TestRules_Match(t *testing.T) {
 			}},
 			config: provider,
 			want: Rule{
-				DisableCustomHTML: true,
+				DisableCustomHTML:                true,
+				SuppressReservedRecipientDomains: true,
 				Headers: map[string]string{
 					"X-Instance-ID": "instance1",
 					"X-Org-ID":      "org1",

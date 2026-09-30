@@ -1,6 +1,7 @@
 package types
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"os"
@@ -95,9 +96,9 @@ func TestSendEmail(t *testing.T) {
 	}
 	ruleErr := errors.New("rule error")
 
-	expectMessage := func(content string, headers map[string]string) *messages.Email {
+	expectMessage := func(recipient, content string, headers map[string]string) *messages.Email {
 		return &messages.Email{
-			Recipients:          []string{"user@example.com"},
+			Recipients:          []string{recipient},
 			Subject:             "Invitation to App",
 			Content:             content,
 			Headers:             headers,
@@ -110,9 +111,12 @@ func TestSendEmail(t *testing.T) {
 		channels          *testChannels
 		text              string
 		displayName       string
+		recipient         string
+		nilSuppressed     bool
 		wantRuleRequested bool
 		wantErr           func(t *testing.T, err error)
 		wantMessage       zchannels.Message
+		wantSuppressed    bool
 	}{
 		{
 			name:     "no provider, canceled",
@@ -139,6 +143,7 @@ func TestSendEmail(t *testing.T) {
 			displayName:       "O'Brien <b>",
 			wantRuleRequested: true,
 			wantMessage: expectMessage(
+				"user@example.ch",
 				`<html><h1>Hello O&#39;Brien &lt;b&gt;,</h1>`+
 					`<p>Click <a href="https://other.example">here</a> to join App</p>`+
 					`<a href="https://login.example.com/invite?userID=user1&code=code1">Accept</a></html>`,
@@ -155,6 +160,7 @@ func TestSendEmail(t *testing.T) {
 			displayName:       "O'Brien <b>",
 			wantRuleRequested: true,
 			wantMessage: expectMessage(
+				"user@example.ch",
 				`<html><h1>Hello O&#39;Brien &lt;b&gt;,</h1>`+
 					`<p>Click here to join App</p>`+
 					`<a href="https://login.example.com/invite?userID=user1&code=code1">Accept</a></html>`,
@@ -171,6 +177,7 @@ func TestSendEmail(t *testing.T) {
 			displayName:       "Bob",
 			wantRuleRequested: true,
 			wantMessage: expectMessage(
+				"user@example.ch",
 				`<html><h1>Hello Bob,</h1>`+
 					`<p>Use <strong>code1</strong><br>to join App</p>`+
 					`<a href="https://login.example.com/invite?userID=user1&code=code1">Accept</a></html>`,
@@ -187,6 +194,7 @@ func TestSendEmail(t *testing.T) {
 			displayName:       "<b>Bob</b><br>",
 			wantRuleRequested: true,
 			wantMessage: expectMessage(
+				"user@example.ch",
 				`<html><h1>Hello &lt;b&gt;Bob&lt;/b&gt;&lt;br&gt;,</h1>`+
 					`<p>Use <strong>code1</strong><br>to join App</p>`+
 					`<a href="https://login.example.com/invite?userID=user1&code=code1">Accept</a></html>`,
@@ -200,6 +208,7 @@ func TestSendEmail(t *testing.T) {
 			displayName:       "Bob",
 			wantRuleRequested: true,
 			wantMessage: expectMessage(
+				"user@example.ch",
 				`<html><h1>Hello Bob,</h1>`+
 					`<p>Dieser Benutzer wurde soeben im Zitadel erstellt. Mit dem Benutzernamen <br><strong>bob@example.com</strong><br> kannst du dich anmelden. (Code <strong>code1</strong>)</p>`+
 					`<a href="https://login.example.com/invite?userID=user1&code=code1">Accept</a></html>`,
@@ -216,6 +225,7 @@ func TestSendEmail(t *testing.T) {
 			displayName:       "Bob",
 			wantRuleRequested: true,
 			wantMessage: expectMessage(
+				"user@example.ch",
 				`<html><h1>Hello Bob,</h1>`+
 					`<p>Dieser Benutzer wurde soeben im Zitadel erstellt. Mit dem Benutzernamen <br><strong>bob@example.com</strong><br> kannst du dich anmelden. (Code <strong>code1</strong>)</p>`+
 					`<a href="https://login.example.com/invite?userID=user1&code=code1">Accept</a></html>`,
@@ -234,10 +244,67 @@ func TestSendEmail(t *testing.T) {
 			displayName:       "Bob",
 			wantRuleRequested: true,
 			wantMessage: expectMessage(
+				"user@example.ch",
 				`<html><h1>Hello Bob,</h1>`+
 					`<p>Click <a href="https://other.example">here</a> to join App</p>`+
 					`<a href="https://login.example.com/invite?userID=user1&code=code1">Accept</a></html>`,
 				map[string]string{"X-Instance-ID": "instance1"},
+			),
+		},
+		{
+			name: "reserved recipient domain is suppressed",
+			channels: &testChannels{
+				emailConfig: smtpConfig,
+				rule:        smtp.Rule{SuppressReservedRecipientDomains: true},
+			},
+			text:              linkText,
+			displayName:       "Bob",
+			recipient:         "user@example.com",
+			wantRuleRequested: true,
+			wantSuppressed:    true,
+		},
+		{
+			name: "reserved recipient domain is suppressed without out parameter",
+			channels: &testChannels{
+				emailConfig: smtpConfig,
+				rule:        smtp.Rule{SuppressReservedRecipientDomains: true},
+			},
+			text:              linkText,
+			displayName:       "Bob",
+			recipient:         "user@user.test",
+			nilSuppressed:     true,
+			wantRuleRequested: true,
+		},
+		{
+			name: "suppression rule, other recipient domain is sent",
+			channels: &testChannels{
+				emailConfig: smtpConfig,
+				rule:        smtp.Rule{SuppressReservedRecipientDomains: true},
+			},
+			text:              linkText,
+			displayName:       "Bob",
+			wantRuleRequested: true,
+			wantMessage: expectMessage(
+				"user@example.ch",
+				`<html><h1>Hello Bob,</h1>`+
+					`<p>Click <a href="https://other.example">here</a> to join App</p>`+
+					`<a href="https://login.example.com/invite?userID=user1&code=code1">Accept</a></html>`,
+				nil,
+			),
+		},
+		{
+			name:              "no rule, reserved recipient domain is sent",
+			channels:          &testChannels{emailConfig: smtpConfig},
+			text:              linkText,
+			displayName:       "Bob",
+			recipient:         "user@example.com",
+			wantRuleRequested: true,
+			wantMessage: expectMessage(
+				"user@example.com",
+				`<html><h1>Hello Bob,</h1>`+
+					`<p>Click <a href="https://other.example">here</a> to join App</p>`+
+					`<a href="https://login.example.com/invite?userID=user1&code=code1">Accept</a></html>`,
+				nil,
 			),
 		},
 		{
@@ -266,11 +333,15 @@ func TestSendEmail(t *testing.T) {
 				ResourceOwner:      "org1",
 				DisplayName:        tt.displayName,
 				PreferredLoginName: "bob@example.com",
-				LastEmail:          "user@example.com",
+				LastEmail:          cmp.Or(tt.recipient, "user@example.ch"),
 				PreferredLanguage:  language.English,
 			}
 
-			notify := SendEmail(t.Context(), tt.channels, mailTemplate, translator, user, &query.LabelPolicy{}, eventType)
+			var deliverySuppressed *bool
+			if !tt.nilSuppressed {
+				deliverySuppressed = new(bool)
+			}
+			notify := SendEmail(t.Context(), tt.channels, mailTemplate, translator, user, &query.LabelPolicy{}, eventType, deliverySuppressed)
 			err = notify(
 				urlTemplate,
 				map[string]any{"Code": "code1", "ApplicationName": "App"},
@@ -285,6 +356,13 @@ func TestSendEmail(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
+			if deliverySuppressed != nil {
+				assert.Equal(t, tt.wantSuppressed, *deliverySuppressed)
+			}
+			if tt.wantMessage == nil && (tt.wantSuppressed || tt.nilSuppressed) {
+				assert.Empty(t, tt.channels.messages)
+				return
+			}
 			require.Len(t, tt.channels.messages, 1)
 			if tt.wantMessage != nil {
 				assert.Equal(t, tt.wantMessage, tt.channels.messages[0])
